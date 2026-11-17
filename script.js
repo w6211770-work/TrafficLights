@@ -1,10 +1,9 @@
 let signals = [];
 const selectEl = document.getElementById('signalSelect');
-let crrentIndex = 0;
+let currentIndex = 0; // ← スペルミス修正 (crrentIndex -> currentIndex)
 
 // CSVをパースしてオブジェクト配列に変換
 function parseCSV(csv) {
-    // 改行コード（\r\n または \n）に対応し、空行を除外
     const lines = csv.trim().split(/\r?\n/).filter(line => line.trim() !== '');
     const headers = lines[0].split(',');
     return lines.slice(1).map(line => {
@@ -22,7 +21,7 @@ async function loadSignalsData() {
     try {
         const response = await fetch('signals.csv');
         if (!response.ok) {
-            throw new Error('HTTPエラー: ${response.status}');
+            throw new Error(`HTTPエラー: ${response.status}`);
         }
         const csvText = await response.text();
         signals = parseCSV(csvText);
@@ -42,12 +41,12 @@ async function loadSignalsData() {
 
         // データ読み込み完了後に初回実行＆1秒ごとの更新を開始
         updateSignal();
-        setInterval(updadeSignal, 1000);
+        setInterval(updateSignal, 1000); // ← スペルミス修正 (updadeSignal -> updateSignal)
     
     } catch (error) {
         console.error('CSVの読み込みに失敗しました:', error);
         document.getElementById('signalText').textContent = 'CSV読み込みエラー';
-        domument.getElementById('cycleInfo').textContent = 'signals.csvが同じフォルダにあるか、Live Serverで開いているか確認してください。';
+        document.getElementById('cycleInfo').textContent = 'signals.csvが同じフォルダにあるか確認してください。'; // ← domument -> document 修正
     }
 }
 
@@ -59,6 +58,7 @@ function timeStrToSeconds(timeStr) {
 
 // 次の信号に切り替える関数
 function nextSignal() {
+    if (signals.length === 0) return;
     currentIndex = (currentIndex + 1) % signals.length;
     selectEl.value = currentIndex;
     updateSignal();
@@ -190,6 +190,5 @@ function initAudioTrigger() {
 // ブラウザの仕様（自動再生ポリシー）により、最初のユーザー操作（画面タップ）でマイクを起動
 document.body.addEventListener('click', initAudioTrigger, { once: true });
 
-// 初回実行＆1秒ごとに更新
-updateSignal();
-setInterval(updateSignal, 1000);
+// 起動時にCSVデータを読み込む
+loadSignalsData();
