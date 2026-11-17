@@ -164,8 +164,8 @@ function initAudioTrigger() {
                 let sum = dataArray.reduce((a, b) => a + b, 0);
                 let average = sum / dataArray.length;
 
-                // 閾値（環境の騒音に合わせて調整可能。例: 75以上）
-                const threshold = 75; 
+                // 閾値（環境の騒音に合わせて調整可能。例: 60以上）
+                const threshold = 60; 
                 const nowTime = Date.now();
 
                 // 一定以上の音量を検知し、かつ前回の検知から1秒以上空いている場合
