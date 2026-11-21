@@ -41,13 +41,24 @@ async function loadSignalsData() {
 
         // データ読み込み完了後に初回実行＆1秒ごとの更新を開始
         updateSignal();
-        setInterval(updateSignal, 1000); // ← スペルミス修正 (updadeSignal -> updateSignal)
+        scheduleNextTick();
+        // setInterval(updateSignal, 1000); // ← スペルミス修正 (updadeSignal -> updateSignal)
     
     } catch (error) {
         console.error('CSVの読み込みに失敗しました:', error);
         document.getElementById('signalText').textContent = 'CSV読み込みエラー';
         document.getElementById('cycleInfo').textContent = 'signals.csvが同じフォルダにあるか確認してください。'; // ← domument -> document 修正
     }
+}
+
+// 次の秒の変わり目（ミリ秒が 0 になる瞬間）ぴったりに updateSignal() を実行するための関数
+function scheduleNextTick() {
+    const now = new Date();
+    const delay = 1000 - now.getMilliseconds();
+    setTimeout(() => {
+        updateSignal();
+        scheduleNextTick();
+    }, delay);
 }
 
 // "HH:MM:SS" をその日の0時からの経過秒数に変換するヘルパー関数
@@ -192,3 +203,12 @@ document.body.addEventListener('click', initAudioTrigger, { once: true });
 
 // 起動時にCSVデータを読み込む
 loadSignalsData();
+
+// 下記の通りとなるので気を付ける。
+// 縦：青30黄3赤40
+// 横：赤33黄3青37
+// 横の赤＝縦の青+縦の黄
+// 横の黄＝縦の黄
+// 横の青＝縦の赤-縦の黄
+
+// KOTOBUKITYOUは合っていた。17：15ごろ。スマホのほうが0.5～１秒程度早く表示されていた。
