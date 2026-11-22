@@ -1,6 +1,12 @@
 let signals = [];
 const selectEl = document.getElementById('signalSelect');
-let currentIndex = 0; // ← スペルミス修正 (crrentIndex -> currentIndex)
+const simTimeInputEl = document.getElementById('simTimeInput');
+const simSearchBtnEl = document.getElementById('simSearchBtn');
+const simClearBtnEl = document.getElementById('simClearBtn');
+const simResultEl = document.getElementById('simResult');
+
+let currentIndex = 0;
+let simulatedSecOfDay = null; // null のときは現在時刻を使用、数値（0〜86399）のときは指定時刻を表示
 
 // CSVをパースしてオブジェクト配列に変換
 function parseCSV(csv) {
@@ -42,12 +48,10 @@ async function loadSignalsData() {
         // データ読み込み完了後に初回実行＆1秒ごとの更新を開始
         updateSignal();
         scheduleNextTick();
-        // setInterval(updateSignal, 1000); // ← スペルミス修正 (updadeSignal -> updateSignal)
-    
     } catch (error) {
         console.error('CSVの読み込みに失敗しました:', error);
         document.getElementById('signalText').textContent = 'CSV読み込みエラー';
-        document.getElementById('cycleInfo').textContent = 'signals.csvが同じフォルダにあるか確認してください。'; // ← domument -> document 修正
+        document.getElementById('cycleInfo').textContent = 'signals.csvが同じフォルダにあるか確認してください。';
     }
 }
 
@@ -61,39 +65,26 @@ function scheduleNextTick() {
     }, delay);
 }
 
-// "HH:MM:SS" をその日の0時からの経過秒数に変換するヘルパー関数
+// "HH:MM" または "HH:MM:SS" をその日の0時からの経過秒数に変換するヘルパー関数
 function timeStrToSeconds(timeStr) {
-    const [h, m, s] = timeStr.split(':').map(Number);
+    const parts = timeStr.trim().split(':').map(Number);
+    const h = parts[0] || 0;
+    const m = parts[1] || 0;
+    const s = parts[2] || 0;
     return h * 3600 + m * 60 + s;
 }
 
-// 次の信号に切り替える関数
-function nextSignal() {
-    if (signals.length === 0) return;
-    currentIndex = (currentIndex + 1) % signals.length;
-    selectEl.value = currentIndex;
-    updateSignal();
+// 経過秒数（0〜86399）を "HH:MM:SS" に変換するヘルパー関数
+function secondsToTimeStr(totalSec) {
+    const clamped = ((totalSec % 86400) + 86400) % 86400;
+    const h = String(Math.floor(clamped / 3600)).padStart(2, '0');
+    const m = String(Math.floor((clamped % 3600) / 60)).padStart(2, '0');
+    const s = String(clamped % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
 }
 
-// プルダウンを手動で変更したとき
-selectEl.addEventListener('change', () => {
-    currentIndex = parseInt(selectEl.value, 10);
-    updateSignal();
-});
-
-// 毎秒実行される更新処理
-function updateSignal() {
-    if (signals.length === 0) return;
-
-    const now = new Date();
-    const currentSecOfDay = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-
-    // 現在時刻の表示更新
-    const timeFormatted = now.toTimeString().split(' ')[0];
-    document.getElementById('currentClock').textContent = `現在時刻: ${timeFormatted}`;
-
-    // 選択中の信号機データを取得
-    const row = signals[currentIndex];
+// 指定した1日の経過秒数における信号状態を計算する関数
+function evaluateSignalAt(row, targetSecOfDay) {
     const startSec = timeStrToSeconds(row['通常運転開始時刻']);
     const endSec = timeStrToSeconds(row['夜間運転開始時刻']);
 
@@ -102,24 +93,21 @@ function updateSignal() {
     const redSec = parseInt(row['赤秒数'], 10);
     const totalCycle = blueSec + yellowSec + redSec;
 
-    const bodyEl = document.body;
-    const signalTextEl = document.getElementById('signalText');
-    const countdownTextEl = document.getElementById('countdownText');
-    const unitTextEl = document.getElementById('unitText');
-    const cycleInfoEl = document.getElementById('cycleInfo');
-
     // 1. 通常運転時間外の判定
-    if (currentSecOfDay < startSec || currentSecOfDay > endSec) {
-        bodyEl.className = 'night';
-        signalTextEl.textContent = `${row['信号機名']} (夜間)`;
-        countdownTextEl.textContent = '夜間';
-        unitTextEl.textContent = `${row['通常運転開始時刻']} 再開`;
-        cycleInfoEl.textContent = `通常運転: ${row['通常運転開始時刻']} 〜 ${row['夜間運転開始時刻']}`;
-        return;
+    if (targetSecOfDay < startSec || targetSecOfDay > endSec) {
+        return {
+            isNight: true,
+            colorClass: 'night',
+            currentColor: '夜間',
+            signalText: `${row['信号機名']} (夜間)`,
+            countdownText: '夜間',
+            unitText: `${row['通常運転開始時刻']} 再開`,
+            cycleInfo: `通常運転: ${row['通常運転開始時刻']} 〜 ${row['夜間運転開始時刻']}`
+        };
     }
 
     // 2. サイクル位置の計算
-    const elapsedSeconds = currentSecOfDay - startSec;
+    const elapsedSeconds = targetSecOfDay - startSec;
     const cyclePos = elapsedSeconds % totalCycle;
 
     let currentColor = '';
@@ -141,74 +129,123 @@ function updateSignal() {
         colorClass = 'red';
     }
 
-    // 4. 画面表示の反映
-    bodyEl.className = colorClass;
-    signalTextEl.textContent = `${row['信号機名']} : ${currentColor}`;
-    countdownTextEl.textContent = remainingSec;
-    unitTextEl.textContent = '秒';
-    cycleInfoEl.textContent = `青:${blueSec}秒 / 黄:${yellowSec}秒 / 赤:${redSec}秒 (位置: ${cyclePos}/${totalCycle}秒)`;
+    return {
+        isNight: false,
+        colorClass,
+        currentColor,
+        remainingSec,
+        signalText: `${row['信号機名']} : ${currentColor}`,
+        countdownText: remainingSec,
+        unitText: '秒',
+        cycleInfo: `青:${blueSec}秒 / 黄:${yellowSec}秒 / 赤:${redSec}秒 (位置: ${cyclePos}/${totalCycle}秒)`
+    };
 }
 
-// --- Web Audio API を用いたオフライン音声（衝撃音・拍手等）検知 ---
-let isAudioActive = false;
-const audioStatusEl = document.getElementById('audioStatus');
+// 指定時刻の検索を実行
+function applySimulatedTime() {
+    if (!simTimeInputEl) return;
+    const rawVal = simTimeInputEl.value.trim();
+    if (!rawVal) {
+        clearSimulatedTime();
+        return;
+    }
 
-function initAudioTrigger() {
-    if (isAudioActive) return;
+    const sec = timeStrToSeconds(rawVal);
+    if (Number.isNaN(sec) || sec < 0 || sec >= 86400) {
+        if (simResultEl) {
+            simResultEl.textContent = '時刻は HH:MM または HH:MM:SS 形式で入力してください。';
+        }
+        return;
+    }
 
-    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-        .then(stream => {
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const source = audioCtx.createMediaStreamSource(stream);
-            const analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 512;
-            source.connect(analyser);
-
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            isAudioActive = true;
-            audioStatusEl.textContent = "音声検知: 作動中（音を鳴らして切替）";
-
-            let lastTriggerTime = 0;
-
-            function checkVolume() {
-                analyser.getByteFrequencyData(dataArray);
-                let sum = dataArray.reduce((a, b) => a + b, 0);
-                let average = sum / dataArray.length;
-
-                // 閾値（環境の騒音に合わせて調整可能。例: 60以上）
-                const threshold = 60; 
-                const nowTime = Date.now();
-
-                // 一定以上の音量を検知し、かつ前回の検知から1秒以上空いている場合
-                if (average > threshold && (nowTime - lastTriggerTime) > 1000) {
-                    lastTriggerTime = nowTime;
-                    audioStatusEl.textContent = `音声検知: 音を検知 (${Math.round(average)}) → 次へ切替`;
-                    nextSignal();
-                }
-
-                requestAnimationFrame(checkVolume);
-            }
-            checkVolume();
-        })
-        .catch(err => {
-            console.warn("マイクの利用が許可されませんでした:", err);
-            audioStatusEl.textContent = "音声検知: マイクエラー（画面タップで切替可能）";
-            // フォールバック：マイクが使えない場合は画面タップで切り替え
-            document.body.addEventListener('click', nextSignal);
-        });
+    simulatedSecOfDay = sec;
+    updateSignal();
 }
 
-// ブラウザの仕様（自動再生ポリシー）により、最初のユーザー操作（画面タップ）でマイクを起動
-document.body.addEventListener('click', initAudioTrigger, { once: true });
+// 指定時刻を解除して現在時刻に戻す
+function clearSimulatedTime() {
+    simulatedSecOfDay = null;
+    if (simTimeInputEl) {
+        simTimeInputEl.value = '';
+    }
+    if (simResultEl) {
+        simResultEl.textContent = '';
+    }
+    updateSignal();
+}
+
+// 次の信号に切り替える関数
+function nextSignal() {
+    if (signals.length === 0) return;
+    currentIndex = (currentIndex + 1) % signals.length;
+    selectEl.value = currentIndex;
+    updateSignal();
+}
+
+// プルダウンを手動で変更したとき
+selectEl.addEventListener('change', () => {
+    currentIndex = parseInt(selectEl.value, 10);
+    updateSignal();
+});
+
+// 指定時刻のイベント登録
+if (simSearchBtnEl) {
+    simSearchBtnEl.addEventListener('click', applySimulatedTime);
+}
+if (simTimeInputEl) {
+    simTimeInputEl.addEventListener('change', applySimulatedTime);
+}
+if (simClearBtnEl) {
+    simClearBtnEl.addEventListener('click', clearSimulatedTime);
+}
+
+// 毎秒実行される更新処理
+function updateSignal() {
+    if (signals.length === 0) return;
+
+    const now = new Date();
+    const currentSecOfDay = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+    // 現在時刻の表示更新
+    const timeFormatted = now.toTimeString().split(' ')[0];
+    document.getElementById('currentClock').textContent = `現在時刻: ${timeFormatted}`;
+
+    // 表示対象となる時刻（指定時刻があればそちらを優先）
+    const activeSecOfDay = simulatedSecOfDay !== null ? simulatedSecOfDay : currentSecOfDay;
+    const row = signals[currentIndex];
+    const state = evaluateSignalAt(row, activeSecOfDay);
+
+    const bodyEl = document.body;
+    const signalTextEl = document.getElementById('signalText');
+    const countdownTextEl = document.getElementById('countdownText');
+    const unitTextEl = document.getElementById('unitText');
+    const cycleInfoEl = document.getElementById('cycleInfo');
+
+    bodyEl.className = state.colorClass;
+    signalTextEl.textContent = simulatedSecOfDay !== null
+        ? `${state.signalText} [指定 ${secondsToTimeStr(simulatedSecOfDay)}]`
+        : state.signalText;
+    countdownTextEl.textContent = state.countdownText;
+    unitTextEl.textContent = state.unitText;
+    cycleInfoEl.textContent = state.cycleInfo;
+
+    if (simResultEl) {
+        if (simulatedSecOfDay !== null) {
+            const targetStr = secondsToTimeStr(simulatedSecOfDay);
+            simResultEl.textContent = state.isNight
+                ? `${targetStr} 時点の ${row['信号機名']}：夜間運転中`
+                : `${targetStr} 時点の ${row['信号機名']}：「${state.currentColor}」（残り ${state.remainingSec} 秒）`;
+        } else {
+            simResultEl.textContent = '';
+        }
+    }
+}
+
+// 画面タップ（クリック）で次の信号に切り替え（プルダウンや指定時刻の操作時は除外）
+document.body.addEventListener('click', (event) => {
+    if (event.target.closest('#signalSelect, #simControls')) return;
+    nextSignal();
+});
 
 // 起動時にCSVデータを読み込む
 loadSignalsData();
-
-// 下記の通りとなるので気を付ける。
-// 縦：青30黄3赤40
-// 横：赤33黄3青37
-// 横の赤＝縦の青+縦の黄
-// 横の黄＝縦の黄
-// 横の青＝縦の赤-縦の黄
-
-// KOTOBUKITYOUは合っていた。17：15ごろ。スマホのほうが0.5～１秒程度早く表示されていた。
